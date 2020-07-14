@@ -24,8 +24,8 @@ import logging
 logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
-znode = "/hbase"
-
+#znode = "/hbase"
+znode = "/hbase-unsecure"
 
 # LocateMeta takes a string representing the location of the ZooKeeper
 # quorum. It then asks ZK for the location of the MetaRegionServer,
