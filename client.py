@@ -32,11 +32,12 @@ logger = logging.getLogger('pybase')
 
 class MainClient:
 
-    def __init__(self, zkquorum, pool_size):
+    def __init__(self, zkquorum, pool_size, znode):
         # Location of the ZooKeeper quorum (csv)
         self.zkquorum = zkquorum
         # Connection pool size per region server (and master!)
         self.pool_size = pool_size
+        self.znode = znode
         # Persistent connection to the master server.
         self.master_client = None
         # IntervalTree data structure that allows me to create ranges
@@ -372,7 +373,7 @@ class MainClient:
             # yep, still no idea why self.master_client can be set to None.
             self.master_client.close()
         # Ask ZooKeeper for the location of the Master.
-        ip, port = zk.LocateMaster(self.zkquorum)
+        ip, port = zk.LocateMaster(self.zkquorum, znode=self.znode)
         try:
             # Try creating a new client instance and setting it as the new
             # master_client.
@@ -478,9 +479,9 @@ class Result:
 # location of ZooKeeper this function will ask ZK for the location of the
 # meta table and create the region client responsible for future meta
 # lookups (masterclient). Returns an instance of MainClient
-def NewClient(zkquorum, socket_pool_size=1):
+def NewClient(zkquorum, socket_pool_size=1, znode='/hbase'):
     # Create the main client.
-    a = MainClient(zkquorum, socket_pool_size)
+    a = MainClient(zkquorum, socket_pool_size, znode)
     # Create the master client.
     a._recreate_master_client()
     return a

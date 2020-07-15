@@ -25,12 +25,12 @@ logger = logging.getLogger('pybase.' + __name__)
 logger.setLevel(logging.DEBUG)
 
 #znode = "/hbase"
-znode = "/hbase-unsecure"
+#znode = "/hbase-unsecure"
 
 # LocateMeta takes a string representing the location of the ZooKeeper
 # quorum. It then asks ZK for the location of the MetaRegionServer,
 # returning a tuple containing (host_name, port).
-def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries=5, zk=None):
+def LocateMaster(zkquorum, establish_connection_timeout=5, missing_znode_retries=5, zk=None, znode='/hbase'):
 
     if zk is None:
         # Using Kazoo for interfacing with ZK
