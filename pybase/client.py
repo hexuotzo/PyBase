@@ -13,24 +13,27 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 """
-import zk.client as zk
-import region.client as region
-from region.region import region_from_cell
-from request import request
+from __future__ import absolute_import, print_function, unicode_literals
+
 import logging
-import logging.config
-from intervaltree import IntervalTree
-from threading import Lock
-from time import sleep
+from builtins import str
 from itertools import chain
-from filters import _to_filter
-from exceptions import *
+from threading import Lock
 
-# Using a tiered logger such that all submodules propagate through to this
-# logger. Changing the logging level here should affect all other modules.
-logger = logging.getLogger('pybase')
+import pybase.region.client as region
+import pybase.zk.client as zk
+from intervaltree import IntervalTree
 
-class MainClient:
+from .exceptions import (MasterServerException, NoSuchTableException,
+                         PyBaseException, RegionException, RegionServerException)
+from .filters import _to_filter
+from .region.region import region_from_cell
+from .request import request
+
+logger = logging.getLogger(__name__)
+
+
+class MainClient(object):
 
     def __init__(self, zkquorum, pool_size, znode):
         # Location of the ZooKeeper quorum (csv)
@@ -58,15 +61,15 @@ class MainClient:
 
     def _add_to_region_cache(self, new_region):
         stop_key = new_region.stop_key
-        if stop_key == '':
+        if stop_key == b'':
             # This is hacky but our interval tree requires hard interval stops.
             # So what's the largest char out there? chr(255) -> '\xff'. If
             # you're using '\xff' as a prefix for your rows then this'll cause
             # a cache miss on every request.
-            stop_key = '\xff'
+            stop_key = b'\xff'
         # Keys are formatted like: 'tablename,key'
-        start_key = new_region.table + ',' + new_region.start_key
-        stop_key = new_region.table + ',' + stop_key
+        start_key = new_region.table + b',' + new_region.start_key
+        stop_key = new_region.table + b',' + stop_key
 
         # Only let one person touch the cache at once.
         with self._cache_lock:
@@ -102,7 +105,7 @@ class MainClient:
     def _delete_from_region_cache(self, table, start_key):
         # Don't acquire the lock because the calling function should have done
         # so already
-        self.region_cache.remove_overlap(table + "," + start_key)
+        self.region_cache.remove_overlap(table + b"," + start_key)
 
     """
         HERE LAY REQUESTS
@@ -207,13 +210,15 @@ class MainClient:
                 # or merged so this recursive call may be scanning multiple regions or only half
                 # of one region).
                 result_set._append_response(self.scan(
-                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key, families=families, filters=filters))
+                    table, start_key=previous_stop_key, stop_key=cur_region.stop_key,
+                    families=families, filters=filters))
                 # We continue here because we don't want to append the
                 # first_response results to the result_set. When we did the
                 # recursive scan it rescanned whatever the first_response
                 # initially contained. Appending both will produce duplicates.
                 previous_stop_key = cur_region.stop_key
-                if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+                if previous_stop_key == b'' or \
+                        (stop_key is not None and previous_stop_key > stop_key):
                     break
                 continue
             # Both calls succeeded! Append the results to the result_set.
@@ -224,11 +229,12 @@ class MainClient:
             previous_stop_key = cur_region.stop_key
             # Stopping criteria. This region is either the end ('') or the end of this region is
             # beyond the specific stop_key.
-            if previous_stop_key == '' or (stop_key is not None and previous_stop_key > stop_key):
+            if previous_stop_key == b'' or (stop_key is not None and previous_stop_key > stop_key):
                 break
         return result_set
 
-    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families, filters):
+    def _scan_hit_region_once(self, previous_stop_key, table, start_key, stop_key, families,
+                              filters):
         try:
             # Lookup the next region to scan by searching for the
             # previous_stop_key (region keys are inclusive on the start and
@@ -236,10 +242,11 @@ class MainClient:
             cur_region = self._find_hosting_region(
                 table, previous_stop_key)
         except PyBaseException as e:
-            # This means that either Master is down or something's funky with the META region. Try handling it
-            # and recursively perform the same call again.
+            # This means that either Master is down or something's funky with the META region.
+            # Try handling it and recursively perform the same call again.
             e._handle_exception(self)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         # Create the scan request object. The last two values are 'Close' and
         # 'Scanner_ID' respectively.
         rq = request.scan_request(
@@ -251,7 +258,8 @@ class MainClient:
             # Uh oh. Probably a region/region server issue. Handle it and try
             # again.
             e._handle_exception(self, dest_region=cur_region)
-            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key, families, filters)
+            return self._scan_hit_region_once(previous_stop_key, table, start_key, stop_key,
+                                              families, filters)
         return response, cur_region
 
     def _scan_region_while_more_results(self, cur_region, response):
@@ -274,7 +282,7 @@ class MainClient:
         # Now close the scanner.
         rq = request.scan_request(
             cur_region, None, None, None, None, True, scanner_id)
-        _ = cur_region.region_client._send_request(rq)
+        cur_region.region_client._send_request(rq)
         # Close it and return the results!
         return response_set
 
@@ -335,15 +343,15 @@ class MainClient:
         # We get ~4 cells back each holding different information. We only care
         # about two of them.
         for cell in cells:
-            if cell.qualifier == "regioninfo":
+            if cell.qualifier == b"regioninfo":
                 # Take the regioninfo information and parse it into our own
                 # Region representation.
                 new_region = region_from_cell(cell)
-            elif cell.qualifier == "server":
+            elif cell.qualifier == b"server":
                 # Grab the host, port of the Region Server that this region is
                 # hosted on.
                 server_loc = cell.value
-                host, port = cell.value.split(':')
+                host, port = cell.value.split(b':')
             else:
                 continue
         # Do we have an existing client for this region server already?
@@ -403,7 +411,7 @@ class MainClient:
             for reg in region_client.regions:
                 self._delete_from_region_cache(reg.table, reg.start_key)
             self.reverse_client_cache.pop(
-                region_client.host + ":" + region_client.port, None)
+                region_client.host + b":" + region_client.port, None)
             region_client.close()
 
     def _purge_region(self, reg):
@@ -417,7 +425,11 @@ class MainClient:
                 pass
 
     def _construct_meta_key(self, table, key):
-        return table + "," + key + ",:"
+        if isinstance(table, str):
+            table = table.encode('utf8')
+        if isinstance(key, str):
+            key = key.encode('utf8')
+        return table + b',' + key + b',:'
 
     def close(self):
         logger.info("Main client received close request.")
@@ -432,7 +444,7 @@ class MainClient:
         self.reverse_client_cache = {}
 
 
-class Result:
+class Result(object):
 
     # Called like Result(my_response), takes all the wanted data from
     # my_response and puts it into our own result structure.
@@ -469,7 +481,7 @@ class Result:
         try:
             self.cells.extend([result.cell for result in rsp.results])
             self.stale = self.stale or rsp.stale
-        except AttributeError as e:
+        except AttributeError:
             # This is a single result object we're merging instead.
             self.cells.extend(rsp.cells)
             self.stale = self.stale or rsp.stale
@@ -485,4 +497,3 @@ def NewClient(zkquorum, socket_pool_size=1, znode='/hbase'):
     # Create the master client.
     a._recreate_master_client()
     return a
-
